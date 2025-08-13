@@ -4,6 +4,7 @@ from PyPDF2 import PdfReader
 from fpdf import FPDF
 import tempfile
 import os
+from datetime import datetime
 
 # -----------------------------
 # Helper Functions
@@ -65,6 +66,21 @@ def process_resume(jd_text, resume_text):
 # -----------------------------
 
 st.set_page_config(page_title="Resume Optimiser", layout="wide")
+
+# Sidebar history display
+st.sidebar.title("📜 History")
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+if st.session_state.history:
+    for i, record in enumerate(reversed(st.session_state.history), start=1):
+        st.sidebar.markdown(f"**{i}. {record['jd_title']}**  
+        ⏱ {record['timestamp']}  
+        🗝 {record['keyword_count']} keywords matched")
+else:
+    st.sidebar.write("No history yet. Generate a resume to see history here.")
+
+# Main title
 st.title("📄 Resume Optimiser & Keyword Highlighter")
 
 st.markdown("""
@@ -113,5 +129,14 @@ if st.button("🚀 Generate Optimized Resume"):
                 file_name="optimized_resume.pdf",
                 mime="application/pdf"
             )
+
+        # Save history
+        jd_title = jd_text.strip().split("\n")[0][:50] + "..."
+        st.session_state.history.append({
+            "jd_title": jd_title,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "keyword_count": len([kw for kw, count in matched_keywords if count > 0])
+        })
+
     else:
         st.warning("⚠️ Please upload your resume and provide the Job Description first.")
