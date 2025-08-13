@@ -61,7 +61,7 @@ def highlight_resume(resume_text, keywords):
 # ----------------------
 st.set_page_config(page_title="Resume Optimiser", layout="wide")
 
-st.title("📄 Resume Optimiser with Keyword Matching & History")
+st.title("📄 Resume Optimiser")
 
 # Sidebar History
 if "history" not in st.session_state:
