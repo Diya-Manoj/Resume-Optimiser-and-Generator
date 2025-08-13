@@ -1,142 +1,138 @@
 import streamlit as st
-import re
 from PyPDF2 import PdfReader
 from fpdf import FPDF
-import tempfile
-import os
+import re
+import pandas as pd
 from datetime import datetime
+import io
 
-# -----------------------------
-# Helper Functions
-# -----------------------------
-
-def extract_text_from_pdf(uploaded_file):
-    """Extract text from uploaded PDF."""
-    pdf_reader = PdfReader(uploaded_file)
-    text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text() + "\n"
-    return text
-
-def save_as_pdf(highlighted_text, filename="optimized_resume.pdf"):
-    """Save highlighted resume as PDF."""
+# -------------------------
+# PDF Saving Function
+# -------------------------
+def save_as_pdf(text, filename="optimized_resume.pdf"):
     pdf = FPDF()
     pdf.add_page()
+    pdf.set_font("Arial", size=12)
 
-    # Use a basic font (works on Streamlit Cloud without TTF files)
-    pdf.set_font("Arial", size=11)
+    # Handle Unicode properly (replace unsupported chars)
+    safe_text = text.encode('latin-1', 'replace').decode('latin-1')
+    for line in safe_text.split("\n"):
+        pdf.multi_cell(0, 8, line)
 
-    # Remove markdown **bold** markers for plain PDF output
-    clean_text = re.sub(r"\*\*(.*?)\*\*", r"\1", highlighted_text)
+    pdf_output = io.BytesIO()
+    pdf.output(pdf_output)
+    pdf_output.seek(0)
+    return pdf_output
 
-    # MultiCell for proper wrapping
-    pdf.multi_cell(0, 8, clean_text)
+# -------------------------
+# Keyword Extraction
+# -------------------------
+def extract_keywords(text):
+    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
+    return pd.Series(words).value_counts()
 
-    temp_dir = tempfile.gettempdir()
-    file_path = os.path.join(temp_dir, filename)
-    pdf.output(file_path)
-    return file_path
+# -------------------------
+# Highlight Resume
+# -------------------------
+def highlight_resume(resume_text, keywords):
+    highlighted = resume_text
+    for kw in keywords:
+        highlighted = re.sub(
+            fr"\b({re.escape(kw)})\b",
+            r"**\1**",
+            highlighted,
+            flags=re.IGNORECASE
+        )
+    return highlighted
 
-def highlight_keywords(text, keywords):
-    """Highlight keywords in resume using markdown bold."""
-    for word in sorted(keywords, key=len, reverse=True):
-        pattern = r'\b(' + re.escape(word) + r')\b'
-        text = re.sub(pattern, r'**\1**', text, flags=re.IGNORECASE)
-    return text
-
-def process_resume(jd_text, resume_text):
-    """Main processing: match keywords, prioritize, highlight."""
-    jd_words = re.findall(r'\b\w+\b', jd_text.lower())
-    resume_words = re.findall(r'\b\w+\b', resume_text.lower())
-
-    keyword_freq = {}
-    for word in jd_words:
-        if len(word) > 2:  # skip short words
-            keyword_freq[word] = keyword_freq.get(word, 0) + resume_words.count(word)
-
-    matched_keywords = sorted(keyword_freq.items(), key=lambda x: (-x[1], x[0]))
-
-    matched_only = [kw for kw, count in matched_keywords if count > 0]
-    highlighted_resume = highlight_keywords(resume_text, matched_only)
-
-    return matched_keywords, keyword_freq, highlighted_resume
-
-# -----------------------------
-# Streamlit UI
-# -----------------------------
-
+# -------------------------
+# Streamlit App Layout
+# -------------------------
 st.set_page_config(page_title="Resume Optimiser", layout="wide")
+st.title("📄 AI Resume Optimiser with Keyword Highlighting")
 
-# Sidebar history display
-st.sidebar.title("📜 History")
+# History
 if "history" not in st.session_state:
     st.session_state.history = []
 
-if st.session_state.history:
-    for i, record in enumerate(reversed(st.session_state.history), start=1):
-        st.sidebar.markdown(f"**{i}. {record['jd_title']}**  
-        ⏱ {record['timestamp']}  
-        🗝 {record['keyword_count']} keywords matched")
-else:
-    st.sidebar.write("No history yet. Generate a resume to see history here.")
+# JD Input Section
+st.subheader("Step 1: Job Description Input")
+jd_option = st.radio("Choose input method:", ["Upload JD (PDF)", "Paste JD Text"])
 
-# Main title
-st.title("📄 Resume Optimiser & Keyword Highlighter")
+job_description = ""
+if jd_option == "Upload JD (PDF)":
+    jd_file = st.file_uploader("Upload Job Description PDF", type=["pdf"], key="jd")
+    if jd_file:
+        reader = PdfReader(jd_file)
+        job_description = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
+elif jd_option == "Paste JD Text":
+    job_description = st.text_area("Paste the Job Description here")
 
-st.markdown("""
-Upload your **resume (PDF)** and either **paste** or **upload** a Job Description.  
-Click **Generate Optimized Resume** to get:
-1. Matched & prioritized keywords
-2. Keyword density heatmap
-3. Optimized resume PDF with highlights
-""")
+# Resume Upload
+st.subheader("Step 2: Upload Resume")
+resume_file = st.file_uploader("Upload Resume PDF", type=["pdf"], key="resume")
 
-# Job Description input
-jd_text = st.text_area("📌 Paste Job Description", height=200)
-jd_file = st.file_uploader("📂 Or Upload Job Description (PDF/TXT)", type=["pdf", "txt"])
+# Process Button
+if st.button("🚀 Optimise Resume"):
+    if job_description.strip() and resume_file:
+        # Extract text from resume
+        reader = PdfReader(resume_file)
+        resume_text = "\n".join([page.extract_text() for page in reader.pages if page.extract_text()])
 
-if jd_file is not None:
-    if jd_file.type == "application/pdf":
-        jd_text = extract_text_from_pdf(jd_file)
-    else:
-        jd_text = jd_file.read().decode("utf-8")
+        # Extract keywords from JD
+        jd_keywords = extract_keywords(job_description)
 
-# Resume upload
-uploaded_resume = st.file_uploader("📄 Upload Your Resume (PDF)", type="pdf")
+        # Match keywords with resume
+        matched_keywords = {kw: count for kw, count in jd_keywords.items() if kw in resume_text.lower()}
 
-# Process button
-if st.button("🚀 Generate Optimized Resume"):
-    if uploaded_resume and jd_text.strip():
-        resume_text = extract_text_from_pdf(uploaded_resume)
+        # Sort by priority (frequency in JD)
+        matched_sorted = sorted(matched_keywords.items(), key=lambda x: x[1], reverse=True)
 
-        matched_keywords, heatmap, highlighted_resume = process_resume(jd_text, resume_text)
+        # Highlight resume
+        highlighted_resume = highlight_resume(resume_text, matched_keywords.keys())
 
-        st.subheader("📊 Matched & Prioritized Keywords")
-        st.json(matched_keywords)
+        # Save as PDF
+        pdf_output = save_as_pdf(highlighted_resume)
 
-        st.subheader("🔥 Keyword Density Heatmap (Word : Count)")
-        st.json(heatmap)
+        # Display results
+        st.subheader("Matched & Prioritized Keywords")
+        st.write(matched_sorted)
 
-        st.subheader("📝 Optimized Resume Preview (with highlighted keywords)")
-        st.markdown(highlighted_resume, unsafe_allow_html=True)
+        st.subheader("Keyword Density Heatmap")
+        heatmap_df = pd.DataFrame(matched_sorted, columns=["Keyword", "Count"])
+        st.dataframe(heatmap_df)
 
-        # Save PDF & download
-        pdf_path = save_as_pdf(highlighted_resume)
-        with open(pdf_path, "rb") as pdf_file:
-            st.download_button(
-                label="⬇️ Download Optimized Resume (PDF)",
-                data=pdf_file,
-                file_name="optimized_resume.pdf",
-                mime="application/pdf"
-            )
+        st.subheader("Optimized Resume Preview")
+        st.markdown(highlighted_resume)
 
-        # Save history
-        jd_title = jd_text.strip().split("\n")[0][:50] + "..."
+        # Download button
+        st.download_button(
+            label="📥 Download Optimized Resume as PDF",
+            data=pdf_output,
+            file_name="optimized_resume.pdf",
+            mime="application/pdf"
+        )
+
+        # Save to history
         st.session_state.history.append({
-            "jd_title": jd_title,
+            "jd_title": job_description[:30] + "...",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "keyword_count": len([kw for kw, count in matched_keywords if count > 0])
+            "keyword_count": len(matched_sorted)
         })
 
     else:
-        st.warning("⚠️ Please upload your resume and provide the Job Description first.")
+        st.warning("⚠ Please upload both the Job Description and Resume.")
+
+# -------------------------
+# Sidebar History
+# -------------------------
+st.sidebar.title("📜 History")
+if st.session_state.history:
+    for i, record in enumerate(reversed(st.session_state.history), start=1):
+        st.sidebar.markdown(
+            f"**{i}. {record['jd_title']}**\n"
+            f"⏱ {record['timestamp']}\n"
+            f"🗝 {record['keyword_count']} keywords matched"
+        )
+else:
+    st.sidebar.write("No history yet. Generate a resume to see history here.")
