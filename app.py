@@ -1,123 +1,85 @@
 import streamlit as st
-import io
 import re
-import pandas as pd
-import matplotlib.pyplot as plt
+from collections import Counter
 from PyPDF2 import PdfReader
-import docx
 from fpdf import FPDF
+import os
 
-# ----------------------------
-# 1️⃣ Helper Functions
-# ----------------------------
-def read_pdf(file):
-    pdf_reader = PdfReader(file)
-    return "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
-
-def read_docx(file):
-    doc = docx.Document(file)
-    return "\n".join([para.text for para in doc.paragraphs])
-
-def get_text_from_upload(uploaded_file):
-    if uploaded_file.name.endswith(".pdf"):
-        return read_pdf(uploaded_file)
-    elif uploaded_file.name.endswith(".docx"):
-        return read_docx(uploaded_file)
-    elif uploaded_file.name.endswith(".txt"):
-        return uploaded_file.read().decode("utf-8")
-    else:
-        return ""
-
-def extract_keywords(text):
-    words = re.findall(r'\b\w+\b', text.lower())
-    stopwords = set([
-        "and", "or", "the", "a", "to", "of", "in", "for", "on", "at", "by", "with",
-        "an", "is", "are", "this", "that", "from", "as", "be", "it", "have", "has"
-    ])
-    keywords = [w for w in words if w not in stopwords and len(w) > 2]
-    return keywords
-
-def match_and_prioritize(resume_text, jd_text):
-    resume_keywords = extract_keywords(resume_text)
-    jd_keywords = extract_keywords(jd_text)
-
-    keyword_freq = {}
-    for kw in jd_keywords:
-        if kw in resume_keywords:
-            keyword_freq[kw] = keyword_freq.get(kw, 0) + 1
-
-    sorted_keywords = sorted(keyword_freq.items(), key=lambda x: x[1], reverse=True)
-    return sorted_keywords
-
-def highlight_resume(resume_text, keywords):
-    highlighted = resume_text
-    for kw, _ in keywords:
-        highlighted = re.sub(rf"\b({kw})\b", r"**\1**", highlighted, flags=re.IGNORECASE)
-    return highlighted
-
-def keyword_density_heatmap(keywords):
-    df = pd.DataFrame(keywords, columns=["Keyword", "Frequency"])
-    fig, ax = plt.subplots()
-    df.plot(kind="barh", x="Keyword", y="Frequency", ax=ax, legend=False)
-    plt.xlabel("Frequency")
-    plt.ylabel("Keyword")
-    plt.title("Keyword Density Heatmap")
-    st.pyplot(fig)
-
+# ------------------ PDF SAVE FUNCTION (Unicode Safe) ------------------ #
 def save_as_pdf(text, filename="optimized_resume.pdf"):
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
+    # Add a Unicode font (must have DejaVuSans.ttf in the project folder)
+    pdf.add_font("DejaVu", "", "DejaVuSans.ttf", uni=True)
+    pdf.set_font("DejaVu", size=12)
+
     for line in text.split("\n"):
-        pdf.multi_cell(0, 10, line)
+        pdf.multi_cell(0, 8, line)
+
     pdf.output(filename)
     return filename
 
-# ----------------------------
-# 2️⃣ Streamlit App UI
-# ----------------------------
-st.title("Resume Optimizer with JD Keyword Matching")
-st.markdown("**Modular** – can integrate with future company role analysis automation.")
+# ------------------ TEXT EXTRACTION ------------------ #
+def extract_text_from_pdf(uploaded_file):
+    reader = PdfReader(uploaded_file)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() + "\n"
+    return text.strip()
 
-# Resume upload
-st.subheader("Upload Your Resume")
-resume_file = st.file_uploader("Upload resume (PDF/DOCX)", type=["pdf", "docx"])
+# ------------------ KEYWORD MATCHING ------------------ #
+def keyword_matching(resume_text, jd_text):
+    resume_words = re.findall(r'\b\w+\b', resume_text.lower())
+    jd_words = re.findall(r'\b\w+\b', jd_text.lower())
+    jd_word_counts = Counter(jd_words)
 
-# JD upload or paste
-st.subheader("Upload or Paste Job Description")
-jd_file = st.file_uploader("Upload JD (PDF/DOCX/TXT)", type=["pdf", "docx", "txt"])
-jd_text_input = st.text_area("Or paste JD here", height=250)
+    matched_keywords = [(word, jd_word_counts[word]) for word in set(resume_words) if word in jd_word_counts]
+    matched_keywords.sort(key=lambda x: (-x[1], x[0]))
+    return matched_keywords
 
-# Extract text
-resume_text = ""
-jd_text = ""
+# ------------------ HIGHLIGHT MATCHES ------------------ #
+def highlight_keywords(resume_text, matched_keywords):
+    highlighted = resume_text
+    for keyword, _ in matched_keywords:
+        highlighted = re.sub(rf'\b({keyword})\b', r'**\1**', highlighted, flags=re.IGNORECASE)
+    return highlighted
 
-if resume_file:
-    resume_text = get_text_from_upload(resume_file)
+# ------------------ STREAMLIT UI ------------------ #
+st.title("📄 Resume Optimiser & Keyword Highlighter")
 
-if jd_file:
-    jd_text = get_text_from_upload(jd_file)
-elif jd_text_input.strip():
-    jd_text = jd_text_input.strip()
+st.sidebar.header("Upload Your Files")
+jd_input_option = st.sidebar.radio("Job Description Input:", ["Paste Text", "Upload PDF"])
 
-# Processing
-if resume_text and jd_text:
-    st.success("Both Resume and Job Description loaded successfully!")
+if jd_input_option == "Paste Text":
+    jd_text = st.text_area("Paste the Job Description here:")
+else:
+    jd_file = st.file_uploader("Upload Job Description PDF", type=["pdf"])
+    jd_text = extract_text_from_pdf(jd_file) if jd_file else ""
 
-    keywords = match_and_prioritize(resume_text, jd_text)
-    st.write("### Matched & Prioritized Keywords", keywords)
+resume_file = st.sidebar.file_uploader("Upload Resume PDF", type=["pdf"])
+resume_text = extract_text_from_pdf(resume_file) if resume_file else ""
 
-    st.write("### Keyword Density Heatmap")
-    keyword_density_heatmap(keywords)
+if jd_text and resume_text:
+    matched_keywords = keyword_matching(resume_text, jd_text)
+    st.subheader("Matched & Prioritized Keywords")
+    st.write(matched_keywords)
 
-    highlighted_resume = highlight_resume(resume_text, keywords)
+    highlighted_resume = highlight_keywords(resume_text, matched_keywords)
 
-    st.write("### Optimized Resume Preview")
-    st.markdown(highlighted_resume)
+    st.subheader("Optimized Resume Preview")
+    st.text_area("", highlighted_resume, height=400)
 
+    # Save as PDF with Unicode font
     pdf_path = save_as_pdf(highlighted_resume)
-    with open(pdf_path, "rb") as f:
-        st.download_button("Download Optimized Resume (PDF)", f, file_name="optimized_resume.pdf", mime="application/pdf")
+    with open(pdf_path, "rb") as pdf_file:
+        st.download_button(
+            label="📥 Download Optimized Resume (PDF)",
+            data=pdf_file,
+            file_name="optimized_resume.pdf",
+            mime="application/pdf"
+        )
+
+    st.info("✅ Modular design — ready for integration with Task 3: Automated Company Role Analysis")
 
 else:
-    st.warning("Please provide both Resume and Job Description to proceed.")
+    st.warning("Please upload both Resume & Job Description to continue.")
