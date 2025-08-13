@@ -1,171 +1,123 @@
 import streamlit as st
-import re
 import io
-import fitz  # PyMuPDF
-import docx
-import nltk
+import re
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-from collections import Counter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
+from PyPDF2 import PdfReader
+import docx
+from fpdf import FPDF
 
-# Download NLTK data
-nltk.download('punkt')
-nltk.download('punkt_tab')
+# ----------------------------
+# 1️⃣ Helper Functions
+# ----------------------------
+def read_pdf(file):
+    pdf_reader = PdfReader(file)
+    return "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
 
-# ------------------------------
-# Helper Functions
-# ------------------------------
-
-def extract_text_from_pdf(pdf_file):
-    """Extract text from PDF file"""
-    pdf_document = fitz.open(stream=pdf_file.read(), filetype="pdf")
-    text = ""
-    for page in pdf_document:
-        text += page.get_text()
-    return text
-
-def extract_text_from_docx(docx_file):
-    """Extract text from DOCX file"""
-    doc = docx.Document(docx_file)
+def read_docx(file):
+    doc = docx.Document(file)
     return "\n".join([para.text for para in doc.paragraphs])
 
-def preprocess_text(text):
-    """Clean and split into sentences"""
-    text = re.sub(r'\s+', ' ', text).strip()
-    sentences = nltk.sent_tokenize(text)
-    return sentences
+def get_text_from_upload(uploaded_file):
+    if uploaded_file.name.endswith(".pdf"):
+        return read_pdf(uploaded_file)
+    elif uploaded_file.name.endswith(".docx"):
+        return read_docx(uploaded_file)
+    elif uploaded_file.name.endswith(".txt"):
+        return uploaded_file.read().decode("utf-8")
+    else:
+        return ""
 
 def extract_keywords(text):
-    """Extract simple keywords (basic placeholder)"""
     words = re.findall(r'\b\w+\b', text.lower())
-    stopwords = set(nltk.corpus.stopwords.words('english'))
+    stopwords = set([
+        "and", "or", "the", "a", "to", "of", "in", "for", "on", "at", "by", "with",
+        "an", "is", "are", "this", "that", "from", "as", "be", "it", "have", "has"
+    ])
     keywords = [w for w in words if w not in stopwords and len(w) > 2]
-    return set(keywords)
+    return keywords
 
-def enhance_bullet_points(sentences, jd_keywords):
-    """Match keywords and rank sentences by relevance"""
-    results = []
-    for sent in sentences:
-        match_count = sum(1 for kw in jd_keywords if kw in sent.lower())
-        if match_count > 0:
-            results.append((sent.strip(), match_count))
-    results.sort(key=lambda x: x[1], reverse=True)
-    return results
-
-def make_pdf(bullets):
-    """Generate PDF with bullet points"""
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4)
-    styles = getSampleStyleSheet()
-    story = []
-    story.append(Paragraph("Optimized Resume Bullets", styles['Heading1']))
-    story.append(Spacer(1, 12))
-    bullet_items = []
-    for b in bullets:
-        bullet_items.append(ListItem(Paragraph(b, styles['Normal'])))
-    story.append(ListFlowable(bullet_items, bulletType='bullet', bulletColor=colors.HexColor("#000000")))
-    doc.build(story)
-    buf.seek(0)
-    return buf.read()
-
-def make_docx_bytes(bullets):
-    """Generate DOCX with bullet points"""
-    try:
-        output = io.BytesIO()
-        doc = docx.Document()
-        doc.add_heading("Optimized Resume Bullets", level=1)
-        for b in bullets:
-            doc.add_paragraph(b, style="List Bullet")
-        doc.save(output)
-        output.seek(0)
-        return output.read()
-    except Exception:
-        return None
-
-def keyword_density_plot(resume_text, jd_keywords):
-    """Generate keyword density heatmap"""
-    words = re.findall(r'\b\w+\b', resume_text.lower())
-    freq = Counter(words)
-    density = {kw: freq.get(kw, 0) for kw in jd_keywords}
-    density_sorted = dict(sorted(density.items(), key=lambda x: x[1], reverse=True))
-
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(
-        [[v] for v in density_sorted.values()],
-        annot=True, fmt="d", cmap="YlGnBu",
-        yticklabels=list(density_sorted.keys()), cbar=False
-    )
-    plt.title("Keyword Density Heatmap")
-    st.pyplot(plt)
-
-# ------------------------------
-# Streamlit App
-# ------------------------------
-
-st.set_page_config(page_title="ATS Resume Optimizer", layout="wide")
-st.title("📄 ATS Resume Optimizer")
-st.markdown("Upload your Resume & Job Description to get **ATS-optimized bullet points** with keyword density analysis.")
-
-# File Upload
-col1, col2 = st.columns(2)
-with col1:
-    resume_file = st.file_uploader("Upload Resume (PDF/DOCX)", type=["pdf", "docx"])
-with col2:
-    jd_file = st.file_uploader("Upload Job Description (PDF/DOCX)", type=["pdf", "docx"])
-
-if resume_file and jd_file:
-    # Extract Resume Text
-    if resume_file.type == "application/pdf":
-        resume_text = extract_text_from_pdf(resume_file)
-    else:
-        resume_text = extract_text_from_docx(resume_file)
-
-    # Extract JD Text
-    if jd_file.type == "application/pdf":
-        jd_text = extract_text_from_pdf(jd_file)
-    else:
-        jd_text = extract_text_from_docx(jd_file)
-
-    # Preprocess & Match
-    resume_sentences = preprocess_text(resume_text)
+def match_and_prioritize(resume_text, jd_text):
+    resume_keywords = extract_keywords(resume_text)
     jd_keywords = extract_keywords(jd_text)
-    ranked = enhance_bullet_points(resume_sentences, jd_keywords)
 
-    if ranked:
-        st.subheader("✅ Optimized Resume Bullet Points")
-        for bullet, score in ranked:
-            st.write(f"- {bullet}  *(match score: {score})*")
+    keyword_freq = {}
+    for kw in jd_keywords:
+        if kw in resume_keywords:
+            keyword_freq[kw] = keyword_freq.get(kw, 0) + 1
 
-        # Heatmap
-        st.subheader("📊 Keyword Density Heatmap")
-        keyword_density_plot(resume_text, jd_keywords)
+    sorted_keywords = sorted(keyword_freq.items(), key=lambda x: x[1], reverse=True)
+    return sorted_keywords
 
-        # Downloads
-        ordered_plain = [r[0] for r in ranked]
+def highlight_resume(resume_text, keywords):
+    highlighted = resume_text
+    for kw, _ in keywords:
+        highlighted = re.sub(rf"\b({kw})\b", r"**\1**", highlighted, flags=re.IGNORECASE)
+    return highlighted
 
-        pdf_bytes = make_pdf(ordered_plain)
-        st.download_button(
-            "📥 Download as PDF",
-            data=pdf_bytes,
-            file_name="optimized_resume_bullets.pdf",
-            mime="application/pdf"
-        )
+def keyword_density_heatmap(keywords):
+    df = pd.DataFrame(keywords, columns=["Keyword", "Frequency"])
+    fig, ax = plt.subplots()
+    df.plot(kind="barh", x="Keyword", y="Frequency", ax=ax, legend=False)
+    plt.xlabel("Frequency")
+    plt.ylabel("Keyword")
+    plt.title("Keyword Density Heatmap")
+    st.pyplot(fig)
 
-        docx_bytes = make_docx_bytes(ordered_plain)
-        if docx_bytes:
-            st.download_button(
-                "📥 Download as DOCX",
-                data=docx_bytes,
-                file_name="optimized_resume_bullets.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+def save_as_pdf(text, filename="optimized_resume.pdf"):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    for line in text.split("\n"):
+        pdf.multi_cell(0, 10, line)
+    pdf.output(filename)
+    return filename
 
-    else:
-        st.warning("No matching keywords found between Resume and Job Description.")
+# ----------------------------
+# 2️⃣ Streamlit App UI
+# ----------------------------
+st.title("Resume Optimizer with JD Keyword Matching")
+st.markdown("**Modular** – can integrate with future company role analysis automation.")
 
-st.markdown("---")
-st.markdown("⚙ **Modular Design:** This code is structured so it can integrate directly with **Task 3** for automated company role analysis.")
+# Resume upload
+st.subheader("Upload Your Resume")
+resume_file = st.file_uploader("Upload resume (PDF/DOCX)", type=["pdf", "docx"])
+
+# JD upload or paste
+st.subheader("Upload or Paste Job Description")
+jd_file = st.file_uploader("Upload JD (PDF/DOCX/TXT)", type=["pdf", "docx", "txt"])
+jd_text_input = st.text_area("Or paste JD here", height=250)
+
+# Extract text
+resume_text = ""
+jd_text = ""
+
+if resume_file:
+    resume_text = get_text_from_upload(resume_file)
+
+if jd_file:
+    jd_text = get_text_from_upload(jd_file)
+elif jd_text_input.strip():
+    jd_text = jd_text_input.strip()
+
+# Processing
+if resume_text and jd_text:
+    st.success("Both Resume and Job Description loaded successfully!")
+
+    keywords = match_and_prioritize(resume_text, jd_text)
+    st.write("### Matched & Prioritized Keywords", keywords)
+
+    st.write("### Keyword Density Heatmap")
+    keyword_density_heatmap(keywords)
+
+    highlighted_resume = highlight_resume(resume_text, keywords)
+
+    st.write("### Optimized Resume Preview")
+    st.markdown(highlighted_resume)
+
+    pdf_path = save_as_pdf(highlighted_resume)
+    with open(pdf_path, "rb") as f:
+        st.download_button("Download Optimized Resume (PDF)", f, file_name="optimized_resume.pdf", mime="application/pdf")
+
+else:
+    st.warning("Please provide both Resume and Job Description to proceed.")
