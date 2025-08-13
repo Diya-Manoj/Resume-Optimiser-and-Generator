@@ -5,3 +5,4 @@ nltk
 matplotlib
 seaborn
 reportlab
+PyPDF2
