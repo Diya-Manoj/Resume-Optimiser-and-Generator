@@ -107,7 +107,7 @@ def keyword_density_plot(resume_text, jd_keywords):
 # ------------------------------
 
 st.set_page_config(page_title="ATS Resume Optimizer", layout="wide")
-st.title("📄 ATS Resume Optimizer — Day 1 + Day 2")
+st.title("📄 ATS Resume Optimizer")
 st.markdown("Upload your Resume & Job Description to get **ATS-optimized bullet points** with keyword density analysis.")
 
 # File Upload
